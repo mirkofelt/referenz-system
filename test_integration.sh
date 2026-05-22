@@ -55,7 +55,7 @@ check "qdrant reachable" \
 
 check "qdrant collection exists" \
   "curl -sf http://${SERVER_IP}:6333/collections/referenzen" \
-  "referenzen"
+  '"status":"ok"'
 
 check "nocodb reachable" \
   "curl -s -o /dev/null -w '%{http_code}' http://${SERVER_IP}:8080" \
