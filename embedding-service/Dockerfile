@@ -2,11 +2,12 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir fastapi uvicorn sentence-transformers
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-# Modell beim Build herunterladen (nicht zur Laufzeit)
+# Cache model at build time — avoids slow download on first request
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
-COPY main.py .
+COPY . .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

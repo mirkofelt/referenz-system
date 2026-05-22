@@ -1,46 +1,124 @@
 # Referenz-System
 
-Self-hosted KI-Suchsystem für Projektreferenzen. Neue Referenzen werden in NocoDB eingetragen und sind sofort über semantische Suche auffindbar — ohne Keywords, nur mit freiem Text.
+Self-hosted semantic search for project references. Add references in NocoDB — they're automatically embedded and searchable with plain-text queries, no keywords needed.
 
-## Stack
+## Architecture
 
-| Komponente | Rolle |
-|---|---|
-| **NocoDB** | Referenzverwaltung (Weboberfläche) |
-| **n8n** | Automatisierung: Sync + Such-API |
-| **Qdrant** | Vektordatenbank |
-| **Embedding Service** | KI-Modell (all-MiniLM-L6-v2, lokal) |
-| **PostgreSQL** | Persistenz für NocoDB |
+```
+NocoDB  ──webhook──▶  n8n (Sync)  ──▶  Embedding Service  ──▶  Qdrant
+                          │
+Browser/Tool  ──────▶  n8n (Search)  ──▶  Embedding Service  ──▶  Qdrant
+```
 
-## Schnellstart
+| Service | Port | Role |
+|---|---|---|
+| NocoDB | 8080 | Reference management UI |
+| n8n | 5678 | Automation: sync + search API |
+| Qdrant | 6333 | Vector database |
+| Embedding Service | 8001 | all-MiniLM-L6-v2 (local, no GPU) |
+| PostgreSQL | — | NocoDB backend (internal) |
+
+## Quickstart
+
+**Requirements:** Docker + Docker Compose, ~2 GB RAM, ports 5678 / 8080 / 6333 / 8001 free.
 
 ```bash
+# 1. Configure
 cp .env.example .env
-# SERVER_IP in .env auf die lokale IP setzen
+# Edit .env: set SERVER_IP to your machine's local IP
+
+# 2. Start (builds embedding service, downloads ~90 MB model once)
 chmod +x setup.sh && ./setup.sh
+
+# 3. Create Qdrant collection (run once after first start)
 chmod +x init-qdrant.sh && ./init-qdrant.sh
 ```
 
-Danach NocoDB (`SERVER_IP:8080`) und n8n (`SERVER_IP:5678`) im Browser öffnen und einrichten — Details in [`ANLEITUNG.md`](ANLEITUNG.md).
+## NocoDB Setup (once)
 
-## Suche
+1. Open `http://SERVER_IP:8080`, create an account
+2. New Base → New Table: **Referenzen**
+3. Add columns:
+
+| Column | Type |
+|---|---|
+| Titel | Text |
+| Beschreibung | Long Text |
+| Tags | Multi Select |
+| Foto | Attachment |
+
+4. In the table → **Details** → **Webhooks** → New webhook:
+   - Event: After Insert + After Update
+   - URL: `http://n8n:5678/webhook/referenz-sync`
+   - Method: POST
+
+## n8n Setup (once)
+
+1. Open `http://SERVER_IP:5678`, create an account
+2. Import `workflow-sync.json` → Activate
+3. Import `workflow-search.json` → Activate
+
+## Usage
+
+**Add a reference:** Enter it in NocoDB → saved and indexed automatically.
+
+**Search:**
 
 ```bash
 curl -X POST http://SERVER_IP:5678/webhook/referenz-suchen \
   -H "Content-Type: application/json" \
-  -d '{"query": "Wärmedämmung Neubau", "limit": 5}'
+  -d '{"query": "Wärmedämmung Wohngebäude Neubau", "limit": 5}'
 ```
 
-## Voraussetzungen
+Response:
 
-- Docker + Docker Compose
-- Ports 5678, 8080, 6333, 8001 frei
-- ~2 GB RAM für das Embedding-Modell
+```json
+{
+  "referenzen": [
+    {
+      "score": 0.91,
+      "titel": "Neubau EFH Potsdam",
+      "beschreibung": "Energieberatung und Baubegleitung...",
+      "tags": "Neubau, EFH, KfW55",
+      "foto_url": null
+    }
+  ],
+  "count": 1
+}
+```
 
-## Konfiguration
+`score` ranges 0–1. Above 0.7 is a strong match.
 
-Alle Secrets und die Server-IP gehen in `.env` (nie committen). Vorlage: `.env.example`.
+## Tests
 
-## Daten
+The embedding service has unit tests (no Docker required):
 
-Liegen in Docker Volumes — bleiben bei `docker compose down` erhalten, gehen nur bei `docker compose down -v` verloren.
+```bash
+cd embedding-service
+pip install -r requirements.txt
+pytest tests/ -v
+```
+
+## Operations
+
+```bash
+# Stop (data preserved in volumes)
+docker compose down
+
+# Start
+docker compose up -d
+
+# Logs
+docker compose logs -f
+
+# Destroy including data
+docker compose down -v
+```
+
+**Data lives in Docker volumes** (`postgres_data`, `qdrant_data`, `n8n_data`) — survives restarts, only lost with `down -v`.
+
+## Troubleshooting
+
+**Reference added but not findable:** Check n8n → Executions for errors on the Sync workflow.
+
+**Embedding service slow on first query:** Model is cached at build time — if you're seeing slow responses, the image needs a rebuild: `docker compose build embeddings`.
