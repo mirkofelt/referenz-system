@@ -23,14 +23,15 @@ check() {
   if out=$(eval "$cmd" 2>&1); then
     if [ -n "$expect" ] && ! echo "$out" | grep -q "$expect"; then
       red "$label (unexpected response: ${out:0:120})"
-      ((FAIL++))
+      # pre-increment avoids set -e triggering when value was 0
+      ((++FAIL))
     else
       green "$label"
-      ((PASS++))
+      ((++PASS))
     fi
   else
     red "$label (error: ${out:0:120})"
-    ((FAIL++))
+    ((++FAIL))
   fi
 }
 
@@ -41,7 +42,7 @@ echo ""
 # --- Docker Services ---
 echo "[ Docker Services ]"
 check "docker compose running" \
-  "docker compose ps --status running 2>/dev/null | grep -c 'running'" \
+  "docker compose ps --status running 2>/dev/null | grep -c 'Up '" \
   "[1-9]"
 
 check "embedding service healthy" \
@@ -57,12 +58,13 @@ check "qdrant collection exists" \
   "referenzen"
 
 check "nocodb reachable" \
-  "curl -sf -o /dev/null -w '%{http_code}' http://${SERVER_IP}:8080" \
+  "curl -s -o /dev/null -w '%{http_code}' http://${SERVER_IP}:8080" \
   "200\|302"
 
+# n8n uses basic auth — 401 means the service is running, credentials just required
 check "n8n reachable" \
-  "curl -sf -o /dev/null -w '%{http_code}' http://${SERVER_IP}:5678" \
-  "200\|301\|302"
+  "curl -s -o /dev/null -w '%{http_code}' http://${SERVER_IP}:5678" \
+  "200\|301\|302\|401"
 
 echo ""
 echo "[ Embedding Service API ]"
@@ -102,11 +104,11 @@ else
 
   if echo "$SYNC_RESULT" | grep -qi "error\|CURL_ERROR\|not found"; then
     red "sync webhook (response: ${SYNC_RESULT:0:120})"
-    ((FAIL++))
+    ((++FAIL))
     echo "     → Is the 'Referenz Sync' workflow active in n8n?"
   else
     green "sync webhook"
-    ((PASS++))
+    ((++PASS))
   fi
 
   sleep 1
@@ -117,14 +119,14 @@ else
 
   if echo "$SEARCH_RESULT" | grep -qi "CURL_ERROR\|not found"; then
     red "search webhook (response: ${SEARCH_RESULT:0:120})"
-    ((FAIL++))
+    ((++FAIL))
     echo "     → Is the 'Referenz Suche' workflow active in n8n?"
   elif echo "$SEARCH_RESULT" | grep -qi "referenzen\|score\|titel"; then
     green "search webhook returns results"
-    ((PASS++))
+    ((++PASS))
   else
     green "search webhook reachable (no results yet — may need a moment)"
-    ((PASS++))
+    ((++PASS))
   fi
 fi
 

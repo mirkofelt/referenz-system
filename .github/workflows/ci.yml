@@ -22,7 +22,6 @@ jobs:
 
       - name: Run tests
         run: pytest embedding-service/tests/ -v
-        working-directory: .
 
   integration-tests:
     name: Integration Tests (Full Stack)
@@ -33,36 +32,63 @@ jobs:
       - name: Create .env from example
         run: |
           cp .env.example .env
-          # In CI everything runs on localhost
           sed -i 's/^SERVER_IP=.*/SERVER_IP=localhost/' .env
-          # Set required secrets to dummy values for CI
           sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci_password/' .env
-          sed -i 's/^NC_JWT_SECRET=.*/NC_JWT_SECRET=ci_jwt_secret_32chars_minimum/' .env
+          sed -i 's/^NC_JWT_SECRET=.*/NC_JWT_SECRET=ci_testing_jwt_secret_not_real_x/' .env
           sed -i 's/^N8N_PASSWORD=.*/N8N_PASSWORD=ci_password/' .env
 
-      - name: Build and start services
+      - name: Build embedding service
+        run: docker compose build embeddings
+
+      - name: Start all services
+        run: docker compose up -d
+
+      - name: Wait for embedding service
         run: |
-          chmod +x setup.sh
-          docker compose build embeddings
-          docker compose up -d
-          echo "Waiting for services to be ready..."
-          sleep 30
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8001/health > /dev/null 2>&1; then
+              echo "Embedding service ready"; break
+            fi
+            [ $i -eq 30 ] && { echo "Timeout: embedding service not ready"; docker compose logs embeddings; exit 1; }
+            echo "Waiting... ($i/30)"; sleep 5
+          done
+
+      - name: Wait for Qdrant
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:6333/healthz > /dev/null 2>&1; then
+              echo "Qdrant ready"; break
+            fi
+            [ $i -eq 20 ] && { echo "Timeout: Qdrant not ready"; docker compose logs qdrant; exit 1; }
+            echo "Waiting... ($i/20)"; sleep 3
+          done
+
+      - name: Wait for NocoDB
+        run: |
+          for i in $(seq 1 40); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080 2>/dev/null || echo "0")
+            if [[ "$code" =~ ^(200|301|302)$ ]]; then
+              echo "NocoDB ready (HTTP $code)"; break
+            fi
+            [ $i -eq 40 ] && { echo "Timeout: NocoDB not ready (last: $code)"; docker compose logs nocodb postgres; exit 1; }
+            echo "Waiting... ($i/40, code=$code)"; sleep 5
+          done
+
+      - name: Wait for n8n
+        run: |
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:5678 2>/dev/null || echo "0")
+            if [[ "$code" =~ ^(200|301|302|401)$ ]]; then
+              echo "n8n ready (HTTP $code)"; break
+            fi
+            [ $i -eq 30 ] && { echo "Timeout: n8n not ready (last: $code)"; docker compose logs n8n; exit 1; }
+            echo "Waiting... ($i/30, code=$code)"; sleep 5
+          done
 
       - name: Initialize Qdrant collection
         run: |
           chmod +x init-qdrant.sh
           ./init-qdrant.sh
-
-      - name: Wait for n8n to be ready
-        run: |
-          for i in $(seq 1 20); do
-            if curl -sf http://localhost:5678 > /dev/null 2>&1; then
-              echo "n8n ready"
-              break
-            fi
-            echo "Waiting for n8n... ($i/20)"
-            sleep 5
-          done
 
       - name: Run integration tests
         run: |
@@ -71,4 +97,4 @@ jobs:
 
       - name: Show logs on failure
         if: failure()
-        run: docker compose logs --tail=50
+        run: docker compose logs --tail=100
