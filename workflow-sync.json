@@ -1,0 +1,97 @@
+{
+  "name": "Referenz Sync (NocoDB → Qdrant)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "referenz-sync",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-sync",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// NocoDB Webhook-Payload verarbeiten\nconst body = $input.first().json.body ?? $input.first().json;\nconst rows = body?.data?.rows ?? [body];\n\nreturn rows.map(row => {\n  const tags = Array.isArray(row.Tags)\n    ? row.Tags.join(', ')\n    : (row.Tags ?? '');\n\n  const text = [\n    row.Titel ?? '',\n    row.Beschreibung ?? '',\n    tags\n  ].filter(s => s.trim() !== '').join('. ');\n\n  return {\n    json: {\n      id: String(row.Id ?? row.id),\n      titel: row.Titel ?? '',\n      beschreibung: row.Beschreibung ?? '',\n      tags: tags,\n      foto_url: row.Foto?.[0]?.url ?? null,\n      text\n    }\n  };\n});"
+      },
+      "id": "node-extract",
+      "name": "Daten extrahieren",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://embeddings:8000/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text }) }}",
+        "options": {}
+      },
+      "id": "node-embed",
+      "name": "Embedding generieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $input.first().json.embedding;\nconst prev = $('Daten extrahieren').first().json;\n\nreturn [{\n  json: {\n    points: [{\n      id: parseInt(prev.id) || Math.abs(prev.id.split('').reduce((a, c) => a * 31 + c.charCodeAt(0), 0)) % 2147483647,\n      vector: embedding,\n      payload: {\n        nocodb_id: prev.id,\n        titel: prev.titel,\n        beschreibung: prev.beschreibung,\n        tags: prev.tags,\n        foto_url: prev.foto_url\n      }\n    }]\n  }\n}];"
+      },
+      "id": "node-prepare-upsert",
+      "name": "Qdrant-Payload aufbauen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "PUT",
+        "url": "http://qdrant:6333/collections/referenzen/points",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-qdrant-upsert",
+      "name": "In Qdrant speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"status\": \"ok\", \"id\": \"{{ $('Daten extrahieren').first().json.id }}\"}"
+      },
+      "id": "node-respond-sync",
+      "name": "Antwort senden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1300, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "Daten extrahieren", "type": "main", "index": 0}]]
+    },
+    "Daten extrahieren": {
+      "main": [[{"node": "Embedding generieren", "type": "main", "index": 0}]]
+    },
+    "Embedding generieren": {
+      "main": [[{"node": "Qdrant-Payload aufbauen", "type": "main", "index": 0}]]
+    },
+    "Qdrant-Payload aufbauen": {
+      "main": [[{"node": "In Qdrant speichern", "type": "main", "index": 0}]]
+    },
+    "In Qdrant speichern": {
+      "main": [[{"node": "Antwort senden", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}

@@ -1,0 +1,110 @@
+{
+  "name": "Referenz Suche (Semantic Search)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "referenz-suchen",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-search",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body ?? $input.first().json;\nconst query = body.query ?? body.text ?? '';\nconst limit = body.limit ?? 5;\n\nif (!query.trim()) {\n  throw new Error('Kein Suchbegriff angegeben (query)');\n}\n\nreturn [{ json: { query, limit } }];"
+      },
+      "id": "node-parse-query",
+      "name": "Query parsen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [420, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://embeddings:8000/embed",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.query }) }}",
+        "options": {}
+      },
+      "id": "node-embed-query",
+      "name": "Query embedden",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [640, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const embedding = $input.first().json.embedding;\nconst prev = $('Query parsen').first().json;\n\nreturn [{\n  json: {\n    vector: embedding,\n    limit: prev.limit,\n    with_payload: true\n  }\n}];"
+      },
+      "id": "node-prepare-search",
+      "name": "Qdrant-Query aufbauen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://qdrant:6333/collections/referenzen/points/search",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "node-qdrant-search",
+      "name": "Qdrant durchsuchen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1080, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "const result = $input.first().json;\nconst hits = result.result ?? [];\n\nconst referenzen = hits.map(hit => ({\n  score: Math.round(hit.score * 100) / 100,\n  id: hit.payload?.nocodb_id ?? hit.id,\n  titel: hit.payload?.titel ?? '',\n  beschreibung: hit.payload?.beschreibung ?? '',\n  tags: hit.payload?.tags ?? '',\n  foto_url: hit.payload?.foto_url ?? null\n}));\n\nreturn [{ json: { referenzen, count: referenzen.length } }];"
+      },
+      "id": "node-format-results",
+      "name": "Ergebnisse aufbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1300, 300]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}"
+      },
+      "id": "node-respond-search",
+      "name": "Antwort senden",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1520, 300]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [[{"node": "Query parsen", "type": "main", "index": 0}]]
+    },
+    "Query parsen": {
+      "main": [[{"node": "Query embedden", "type": "main", "index": 0}]]
+    },
+    "Query embedden": {
+      "main": [[{"node": "Qdrant-Query aufbauen", "type": "main", "index": 0}]]
+    },
+    "Qdrant-Query aufbauen": {
+      "main": [[{"node": "Qdrant durchsuchen", "type": "main", "index": 0}]]
+    },
+    "Qdrant durchsuchen": {
+      "main": [[{"node": "Ergebnisse aufbereiten", "type": "main", "index": 0}]]
+    },
+    "Ergebnisse aufbereiten": {
+      "main": [[{"node": "Antwort senden", "type": "main", "index": 0}]]
+    }
+  },
+  "settings": {"executionOrder": "v1"}
+}

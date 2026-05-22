@@ -1,0 +1,61 @@
+services:
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD muss gesetzt sein}
+      POSTGRES_DB: nocodb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  nocodb:
+    image: nocodb/nocodb:latest
+    ports:
+      - "8080:8080"
+    environment:
+      NC_DB: "pg://postgres:5432?u=${POSTGRES_USER:-admin}&p=${POSTGRES_PASSWORD}&d=nocodb"
+      NC_AUTH_JWT_SECRET: ${NC_JWT_SECRET:?NC_JWT_SECRET muss gesetzt sein}
+    volumes:
+      - nocodb_data:/usr/app/data
+    depends_on:
+      - postgres
+    restart: unless-stopped
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    ports:
+      - "6333:6333"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  embeddings:
+    build: ./embedding-service
+    ports:
+      - "8001:8000"
+    restart: unless-stopped
+
+  n8n:
+    image: n8nio/n8n:latest
+    ports:
+      - "5678:5678"
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: ${N8N_USER:-admin}
+      N8N_BASIC_AUTH_PASSWORD: ${N8N_PASSWORD:?N8N_PASSWORD muss gesetzt sein}
+      WEBHOOK_URL: http://${SERVER_IP:-localhost}:5678/
+      GENERIC_TIMEZONE: Europe/Berlin
+    volumes:
+      - n8n_data:/home/node/.n8n
+    depends_on:
+      - embeddings
+      - qdrant
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  nocodb_data:
+  qdrant_data:
+  n8n_data:
