@@ -1,11 +1,13 @@
 #!/bin/bash
 # Integration smoke test — run after ./setup.sh and ./init-qdrant.sh
 # Usage: SERVER_IP=192.168.1.100 ./test_integration.sh
-#        ./test_integration.sh   (defaults to localhost)
+#        ./test_integration.sh              (defaults to localhost)
+#        CI=true ./test_integration.sh      (skips n8n workflow checks)
 
 set -euo pipefail
 
 SERVER_IP="${SERVER_IP:-localhost}"
+CI="${CI:-false}"
 PASS=0
 FAIL=0
 
@@ -80,49 +82,50 @@ check "POST /embed/batch returns multiple vectors" \
 echo ""
 echo "[ End-to-End: Sync + Search ]"
 
-# Simulate NocoDB webhook (sync a test reference)
-SYNC_RESULT=$(curl -sf -X POST "http://${SERVER_IP}:5678/webhook/referenz-sync" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "data": {
-      "rows": [{
-        "Id": 9999,
-        "Titel": "Test Referenz Integration",
-        "Beschreibung": "Automatischer Integrationstest für das Referenzsystem.",
-        "Tags": ["Test", "Integration"],
-        "Foto": null
-      }]
-    }
-  }' 2>&1 || echo "CURL_ERROR")
-
-if echo "$SYNC_RESULT" | grep -qi "error\|CURL_ERROR\|not found"; then
-  red "sync webhook (response: ${SYNC_RESULT:0:120})"
-  ((FAIL++))
-  echo "     → Is the 'Referenz Sync' workflow active in n8n?"
+if [ "$CI" = "true" ]; then
+  echo "(skipped in CI — n8n workflows not imported)"
 else
-  green "sync webhook"
-  ((PASS++))
-fi
+  # Simulate NocoDB webhook (sync a test reference)
+  SYNC_RESULT=$(curl -sf -X POST "http://${SERVER_IP}:5678/webhook/referenz-sync" \
+    -H "Content-Type: application/json" \
+    -d '{
+      "data": {
+        "rows": [{
+          "Id": 9999,
+          "Titel": "Test Referenz Integration",
+          "Beschreibung": "Automatischer Integrationstest für das Referenzsystem.",
+          "Tags": ["Test", "Integration"],
+          "Foto": null
+        }]
+      }
+    }' 2>&1 || echo "CURL_ERROR")
 
-# Wait briefly for Qdrant to index
-sleep 1
+  if echo "$SYNC_RESULT" | grep -qi "error\|CURL_ERROR\|not found"; then
+    red "sync webhook (response: ${SYNC_RESULT:0:120})"
+    ((FAIL++))
+    echo "     → Is the 'Referenz Sync' workflow active in n8n?"
+  else
+    green "sync webhook"
+    ((PASS++))
+  fi
 
-# Search for the test reference
-SEARCH_RESULT=$(curl -sf -X POST "http://${SERVER_IP}:5678/webhook/referenz-suchen" \
-  -H "Content-Type: application/json" \
-  -d '{"query": "Integrationstest Referenzsystem", "limit": 3}' 2>&1 || echo "CURL_ERROR")
+  sleep 1
 
-if echo "$SEARCH_RESULT" | grep -qi "CURL_ERROR\|not found"; then
-  red "search webhook (response: ${SEARCH_RESULT:0:120})"
-  ((FAIL++))
-  echo "     → Is the 'Referenz Suche' workflow active in n8n?"
-elif echo "$SEARCH_RESULT" | grep -qi "referenzen\|score\|titel"; then
-  green "search webhook returns results"
-  ((PASS++))
-else
-  # Search works but no results yet (index delay) — partial pass
-  green "search webhook reachable (no results yet — may need a moment)"
-  ((PASS++))
+  SEARCH_RESULT=$(curl -sf -X POST "http://${SERVER_IP}:5678/webhook/referenz-suchen" \
+    -H "Content-Type: application/json" \
+    -d '{"query": "Integrationstest Referenzsystem", "limit": 3}' 2>&1 || echo "CURL_ERROR")
+
+  if echo "$SEARCH_RESULT" | grep -qi "CURL_ERROR\|not found"; then
+    red "search webhook (response: ${SEARCH_RESULT:0:120})"
+    ((FAIL++))
+    echo "     → Is the 'Referenz Suche' workflow active in n8n?"
+  elif echo "$SEARCH_RESULT" | grep -qi "referenzen\|score\|titel"; then
+    green "search webhook returns results"
+    ((PASS++))
+  else
+    green "search webhook reachable (no results yet — may need a moment)"
+    ((PASS++))
+  fi
 fi
 
 echo ""

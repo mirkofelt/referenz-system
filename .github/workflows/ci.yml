@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit-tests:
+    name: Unit Tests (Embedding Service)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: embedding-service/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r embedding-service/requirements.txt
+
+      - name: Run tests
+        run: pytest embedding-service/tests/ -v
+        working-directory: .
+
+  integration-tests:
+    name: Integration Tests (Full Stack)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create .env from example
+        run: |
+          cp .env.example .env
+          # In CI everything runs on localhost
+          sed -i 's/^SERVER_IP=.*/SERVER_IP=localhost/' .env
+          # Set required secrets to dummy values for CI
+          sed -i 's/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci_password/' .env
+          sed -i 's/^NC_JWT_SECRET=.*/NC_JWT_SECRET=ci_jwt_secret_32chars_minimum/' .env
+          sed -i 's/^N8N_PASSWORD=.*/N8N_PASSWORD=ci_password/' .env
+
+      - name: Build and start services
+        run: |
+          chmod +x setup.sh
+          docker compose build embeddings
+          docker compose up -d
+          echo "Waiting for services to be ready..."
+          sleep 30
+
+      - name: Initialize Qdrant collection
+        run: |
+          chmod +x init-qdrant.sh
+          ./init-qdrant.sh
+
+      - name: Wait for n8n to be ready
+        run: |
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:5678 > /dev/null 2>&1; then
+              echo "n8n ready"
+              break
+            fi
+            echo "Waiting for n8n... ($i/20)"
+            sleep 5
+          done
+
+      - name: Run integration tests
+        run: |
+          chmod +x test_integration.sh
+          CI=true SERVER_IP=localhost ./test_integration.sh
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --tail=50
