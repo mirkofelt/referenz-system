@@ -91,13 +91,22 @@ Response:
 
 ## Tests
 
-The embedding service has unit tests (no Docker required):
+**Unit tests** (no Docker required — tests the embedding service in isolation):
 
 ```bash
 cd embedding-service
 pip install -r requirements.txt
 pytest tests/ -v
 ```
+
+**Integration test** (requires the full stack to be running):
+
+```bash
+chmod +x test_integration.sh
+SERVER_IP=192.168.1.100 ./test_integration.sh
+```
+
+Checks all services, the embedding API, the sync webhook, and an end-to-end search. Prints clear pass/fail with troubleshooting hints on failure.
 
 ## Operations
 
